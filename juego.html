@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Estadio 3D - Jugador y NPC Autónomo</title>
+    <!-- Tailwind CSS CDN para la interfaz gráfica y HUD -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: #050b14;
+            user-select: none;
+        }
+        #webgl-container {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        /* Custom scrollbars and blur effect for UI */
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.75);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+    </style>
+    <!-- Three.js Library & OrbitControls -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body class="relative text-white antialiased">
+
+    <!-- WebGL Canvas Container -->
+    <div id="webgl-container"></div>
+
+    <!-- Interface Overlay / Control Legend HUD -->
+    <div class="absolute top-4 left-4 z-10 flex flex-col gap-3 pointer-events-none">
+        <!-- Title Banner -->
+        <div class="glass-panel p-4 rounded-xl shadow-2xl max-w-sm pointer-events-auto">
+            <h1 class="text-lg font-bold text-emerald-400 flex items-center gap-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                Estadio Virtual 3D
+            </h1>
+            <p class="text-xs text-slate-300 mt-1">
+                Explora el campo e interactúa observando al NPC interactivo.
+            </p>
+        </div>
+
+        <!-- Controls Legend -->
+        <div class="glass-panel p-4 rounded-xl shadow-2xl max-w-sm pointer-events-auto">
+            <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">Controles del Jugador</h2>
+            <div class="grid grid-cols-2 gap-2 text-xs">
+                <div class="flex items-center gap-2">
+                    <kbd class="px-2 py-1 bg-slate-800 border border-slate-600 rounded text-amber-400 font-mono font-bold">↑ ↓</kbd>
+                    <span class="text-slate-200">Moverse</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <kbd class="px-2 py-1 bg-slate-800 border border-slate-600 rounded text-amber-400 font-mono font-bold">← →</kbd>
+                    <span class="text-slate-200">Girar</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <kbd class="px-2 py-1 bg-slate-800 border border-slate-600 rounded text-emerald-400 font-mono font-bold">Shift</kbd>
+                    <span class="text-slate-200">Correr</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <kbd class="px-2 py-1 bg-slate-800 border border-slate-600 rounded text-cyan-400 font-mono font-bold">Espacio</kbd>
+                    <span class="text-slate-200">Saltar</span>
+                </div>
+            </div>
+            <p class="text-[10px] text-slate-400 mt-2 border-t border-slate-700/50 pt-2">
+                También puedes usar <span class="text-amber-300">WASD</span> para desplazarte.
+            </p>
+        </div>
+    </div>
+
+    <!-- NPC Status / Dialogue Box HUD -->
+    <div class="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 w-11/12 max-w-md pointer-events-none">
+        <div class="glass-panel p-3 rounded-xl shadow-2xl flex items-center gap-3 border-amber-500/30">
+            <div class="relative">
+                <div id="npc-status-dot" class="w-3 h-3 rounded-full bg-emerald-500 animate-pulse"></div>
+            </div>
+            <div class="flex-1 min-w-0">
+                <div class="flex justify-between items-center">
+                    <span class="text-xs font-bold text-amber-300 uppercase tracking-wide">NPC Autónomo</span>
+                    <span id="npc-state-tag" class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">Caminando</span>
+                </div>
+                <p id="npc-thought" class="text-xs text-slate-200 italic truncate mt-0.5">"Disfrutando de la tranquilidad del estadio..."</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Game Script -->
+    <script>
+        // ==========================================
+        // 1. CONFIGURACIÓN E INICIALIZACIÓN DE SCENE
+        // ==========================================
+        const container = document.getElementById('webgl-container');
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0a1128);
+        scene.fog = new THREE.FogExp2(0x0a1128, 0.008);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 500);
+        
+        const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        container.appendChild(renderer.domElement);
+
+        // ==========================================
+        // 2. ILUMINACIÓN DEL ESTADIO
+        // ==========================================
+        const ambientLight = new THREE.AmbientLight(0xddeeff, 0.4);
+        scene.add(ambientLight);
+
+        // Luz Sol / Iluminación general
+        const sunLight = new THREE.DirectionalLight(0xfff5ea, 0.8);
+        sunLight.position.set(40, 80, 20);
+        sunLight.castShadow = true;
+        sunLight.shadow.mapSize.width = 2048;
+        sunLight.shadow.mapSize.height = 2048;
+        sunLight.shadow.camera.near = 0.5;
+        sunLight.shadow.camera.far = 250;
+        const d = 60;
+        sunLight.shadow.camera.left = -d;
+        sunLight.shadow.camera.right = d;
+        sunLight.shadow.camera.top = d;
+        sunLight.shadow.camera.bottom = -d;
+        scene.add(sunLight);
+
+        // Torretas de luz del estadio (Reflectores)
+        function createStadiumFloodlight(x, z) {
+            const group = new THREE.Group();
+            group.position.set(x, 0, z);
+
+            // Torre
+            const poleGeo = new THREE.CylinderGeometry(0.4, 0.8, 30, 8);
+            const poleMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.5 });
+            const pole = new THREE.Mesh(poleGeo, poleMat);
+            pole.position.y = 15;
+            pole.castShadow = true;
+            group.add(pole);
+
+            // Panel de luces
+            const panelGeo = new THREE.BoxGeometry(8, 4, 1);
+            const panelMat = new THREE.MeshStandardMaterial({ color: 0x1e293b });
+            const panel = new THREE.Mesh(panelGeo, panelMat);
+            panel.position.set(0, 30, 0);
+            panel.rotation.x = Math.PI / 6;
+            group.add(panel);
+
+            // Focos
+            const spotLight = new THREE.SpotLight(0xffffff, 1.2);
+            spotLight.position.set(0, 30, 0);
+            spotLight.target.position.set(0, 0, 0);
+            spotLight.angle = Math.PI / 3;
+            spotLight.penumbra = 0.5;
+            group.add(spotLight);
+
+            scene.add(group);
+        }
+
+        createStadiumFloodlight(60, 45);
+        createStadiumFloodlight(-60, 45);
+        createStadiumFloodlight(60, -45);
+        createStadiumFloodlight(-60, -45);
+
+        // ==========================================
+        // 3. CONSTRUCCIÓN DEL ESTADIO Y LÍMITES
+        // ==========================================
+        // Dimensiones del campo
+        const FIELD_WIDTH = 90;  // Eje X
+        const FIELD_HEIGHT = 60; // Eje Z
+        const BOUNDS_X = FIELD_WIDTH / 2 - 1.5;
+        const BOUNDS_Z = FIELD_HEIGHT / 2 - 1.5;
+
+        // CÉSPED CON PATRÓN DE FRANJAS
+        const pitchGroup = new THREE.Group();
+        const stripeWidth = 6;
+        const numStripes = Math.floor(FIELD_WIDTH / stripeWidth);
+
+        for (let i = 0; i < numStripes; i++) {
+            const stripeGeo = new THREE.PlaneGeometry(stripeWidth, FIELD_HEIGHT);
+            const isDark = i % 2 === 0;
+            const stripeMat = new THREE.MeshStandardMaterial({
+                color: isDark ? 0x1e5e2f : 0x247239,
+                roughness: 0.8
+            });
+            const stripe = new THREE.Mesh(stripeGeo, stripeMat);
+            stripe.rotation.x = -Math.PI / 2;
+            stripe.position.x = (i * stripeWidth) - (FIELD_WIDTH / 2) + (stripeWidth / 2);
+            stripe.receiveShadow = true;
+            pitchGroup.add(stripe);
+        }
+        scene.add(pitchGroup);
+
+        // LÍNEAS DEL CAMPO
+        function createLine(w, h, x, z, rot = 0) {
+            const geo = new THREE.PlaneGeometry(w, h);
+            const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.rotation.x = -Math.PI / 2;
+            mesh.rotation.z = rot;
+            mesh.position.set(x, 0.02, z);
+            scene.add(mesh);
+        }
+
+        const lineWidth = 0.4;
+        // Perímetro
+        createLine(FIELD_WIDTH, lineWidth, 0, -FIELD_HEIGHT/2);
+        createLine(FIELD_WIDTH, lineWidth, 0, FIELD_HEIGHT/2);
+        createLine(lineWidth, FIELD_HEIGHT, -FIELD_WIDTH/2, 0);
+        createLine(lineWidth, FIELD_HEIGHT, FIELD_WIDTH/2, 0);
+        // Centro
+        createLine(lineWidth, FIELD_HEIGHT, 0, 0);
+
+        // Círculo Central
+        const circleGeo = new THREE.RingGeometry(8, 8 + lineWidth, 32);
+        const circleMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+        const circle = new THREE.Mesh(circleGeo, circleMat);
+        circle.rotation.x = -Math.PI / 2;
+        circle.position.y = 0.02;
+        scene.add(circle);
+
+        // Áreas de Portería
+        function createBoxLines(w, d, xX) {
+            createLine(w, lineWidth, xX, -d/2);
+            createLine(w, lineWidth, xX, d/2);
+            createLine(lineWidth, d, xX + (xX > 0 ? -w/2 : w/2), 0);
+        }
+        createBoxLines(14, 28, -FIELD_WIDTH/2 + 7);
+        createBoxLines(14, 28, FIELD_WIDTH/2 - 7);
+
+        // PORTERÍAS 3D (Arcos)
+        const goalBoxes = []; // Para colisiones
+
+        function createGoal(x, isLeft) {
+            const goalGroup = new THREE.Group();
+            const postMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.2, metalness: 0.5 });
+            const postRadius = 0.15;
+            const goalHeight = 3.5;
+            const goalWidth = 9.0;
+            const goalDepth = 2.5;
+
+            // Postes verticales
+            const p1 = new THREE.Mesh(new THREE.CylinderGeometry(postRadius, postRadius, goalHeight), postMat);
+            p1.position.set(0, goalHeight/2, -goalWidth/2);
+            p1.castShadow = true;
+
+            const p2 = p1.clone();
+            p2.position.set(0, goalHeight/2, goalWidth/2);
+
+            // Travesaño superior
+            const crossbar = new THREE.Mesh(new THREE.CylinderGeometry(postRadius, postRadius, goalWidth), postMat);
+            crossbar.rotation.x = Math.PI / 2;
+            crossbar.position.set(0, goalHeight, 0);
+            crossbar.castShadow = true;
+
+            goalGroup.add(p1, p2, crossbar);
+
+            // Red (Visualización simple semi-transparente)
+            const netGeo = new THREE.BoxGeometry(goalDepth, goalHeight, goalWidth);
+            const netMat = new THREE.MeshStandardMaterial({
+                color: 0xffffff,
+                wireframe: true,
+                transparent: true,
+                opacity: 0.3
+            });
+            const net = new THREE.Mesh(netGeo, netMat);
+            const direction = isLeft ? -1 : 1;
+            net.position.set(direction * goalDepth / 2, goalHeight / 2, 0);
+            goalGroup.add(net);
+
+            goalGroup.position.set(x, 0, 0);
+            scene.add(goalGroup);
+
+            // Guardar bounding box para evitar atravesar
+            goalBoxes.push(new THREE.Box3().setFromObject(net));
+        }
+
+        createGoal(-FIELD_WIDTH / 2, true);
+        createGoal(FIELD_WIDTH / 2, false);
+
+        // GRADAS / TRIBUNAS DEL ESTADIO
+        function createBleachers() {
+            const bleacherMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.7 });
+            const seatMatA = new THREE.MeshStandardMaterial({ color: 0x0284c7 }); // Azul
+            const seatMatB = new THREE.MeshStandardMaterial({ color: 0xe11d48 }); // Rojo
+
+            function buildStand(w, d, h, x, z, rotY) {
+                const group = new THREE.Group();
+                const steps = 8;
+                for (let i = 0; i < steps; i++) {
+                    const stepGeo = new THREE.BoxGeometry(w, h, d / steps);
+                    const step = new THREE.Mesh(stepGeo, bleacherMat);
+                    step.position.set(0, i * h + h / 2, i * (d / steps));
+                    step.receiveShadow = true;
+                    group.add(step);
+
+                    // Asientos simulados
+                    const seatGeo = new THREE.BoxGeometry(w * 0.95, h * 0.5, (d / steps) * 0.6);
+                    const seat = new THREE.Mesh(seatGeo, i % 2 === 0 ? seatMatA : seatMatB);
+                    seat.position.set(0, i * h + h + 0.1, i * (d / steps));
+                    group.add(seat);
+                }
+                group.position.set(x, 0, z);
+                group.rotation.y = rotY;
+                scene.add(group);
+            }
+
+            // Tribunas laterales
+            buildStand(FIELD_WIDTH + 20, 20, 1.2, 0, -FIELD_HEIGHT / 2 - 12, 0);
+            buildStand(FIELD_WIDTH + 20, 20, 1.2, 0, FIELD_HEIGHT / 2 + 12, Math.PI);
+        }
+        createBleachers();
+
+        // ==========================================
+        // 4. CREACIÓN DEL PERSONAJE NPC (Basado en la Descripción)
+        // ==========================================
+        /*
+          CARACTERÍSTICAS APLICADAS AL NPC:
+          - Facciones: Rostro ovalado alargado, piel beige cálida melocotón (0xebc49f).
+          - Cabello: Oscuro/negro, abundante, rizado con volumen superior.
+          - Prenda: Gorro/capucha oscura sobre la cabeza (0x111827).
+          - Gafas: Montura metálica dorada delgada aviador, lentes transparentes con reflejo cian/azul.
+          - Accesorios: Pendiente circular dorado en oreja izquierda.
+          - Ropa: Camiseta deportiva azul marino/grisáceo (0x1e293b) con detalles vivos en naranja fluorescente (0xf97316) en hombros/pecho.
+        */
+
+        function createDetailedNPC() {
+            const npcGroup = new THREE.Group();
+
+            // Materiales del NPC
+            const skinMat = new THREE.MeshStandardMaterial({ color: 0xebc49f, roughness: 0.6 }); // Tono beige cálido
+            const hairMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 }); // Rizado oscuro
+            const hatMat = new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.8 }); // Gorro oscuro
+            const shirtMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.7 }); // Camiseta azul marino
+            const accentMat = new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.4 }); // Naranja fluorescente
+            const pantsMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.8 }); // Pantalón deportivo
+            const goldMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, metalness: 0.9, roughness: 0.2 }); // Gafas y arete
+            const lensMat = new THREE.MeshPhysicalMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.4, roughness: 0.1 }); // Reflejo azul
+
+            // 1. Torso y Camiseta
+            const torsoGeo = new THREE.BoxGeometry(0.7, 0.9, 0.4);
+            const torso = new THREE.Mesh(torsoGeo, shirtMat);
+            torso.position.y = 1.35;
+            torso.castShadow = true;
+            npcGroup.add(torso);
+
+            // Detalle Naranja Fluorescente en Hombros/Pecho
+            const shoulderGeo = new THREE.BoxGeometry(0.75, 0.2, 0.42);
+            const shoulders = new THREE.Mesh(shoulderGeo, accentMat);
+            shoulders.position.set(0, 1.7, 0);
+            npcGroup.add(shoulders);
+
+            // 2. Cabeza y Rostro Alargado
+            const headGeo = new THREE.BoxGeometry(0.42, 0.52, 0.42); // Forma ovalada/alargada
+            const head = new THREE.Mesh(headGeo, skinMat);
+            head.position.set(0, 2.05, 0);
+            head.castShadow = true;
+            npcGroup.add(head);
+
+            // 3. Cabello Rizado y Gorro Oscuro
+            const hatGeo = new THREE.BoxGeometry(0.46, 0.25, 0.46);
+            const hat = new THREE.Mesh(hatGeo, hatMat);
+            hat.position.set(0, 2.3, -0.02);
+            npcGroup.add(hat);
+
+            // Rizos de cabello que sobresalen
+            for (let i = 0; i < 8; i++) {
+                const curlGeo = new THREE.DodecahedronGeometry(0.06);
+                const curl = new THREE.Mesh(curlGeo, hairMat);
+                const angle = (i / 8) * Math.PI * 2;
+                curl.position.set(Math.cos(angle) * 0.22, 2.22, Math.sin(angle) * 0.22);
+                npcGroup.add(curl);
+            }
+
+            // 4. Gafas Doradas Aviador
+            const glassesGroup = new THREE.Group();
+            // Montura doble puente
+            const frameGeo = new THREE.TorusGeometry(0.09, 0.012, 8, 16);
+            const leftFrame = new THREE.Mesh(frameGeo, goldMat);
+            leftFrame.position.set(-0.11, 0, 0);
+            const rightFrame = new THREE.Mesh(frameGeo, goldMat);
+            rightFrame.position.set(0.11, 0, 0);
+
+            // Cristal
+            const glassGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.01, 16);
+            glassGeo.rotateX(Math.PI / 2);
+            const leftLens = new THREE.Mesh(glassGeo, lensMat);
+            leftLens.position.set(-0.11, 0, 0);
+            const rightLens = new THREE.Mesh(glassGeo, lensMat);
+            rightLens.position.set(0.11, 0, 0);
+
+            // Puente metálico
+            const bridgeGeo = new THREE.CylinderGeometry(0.008, 0.008, 0.12);
+            bridgeGeo.rotateZ(Math.PI / 2);
+            const bridge = new THREE.Mesh(bridgeGeo, goldMat);
+            bridge.position.set(0, 0.04, 0);
+
+            glassesGroup.add(leftFrame, rightFrame, leftLens, rightLens, bridge);
+            glassesGroup.position.set(0, 2.08, 0.22);
+            npcGroup.add(glassesGroup);
+
+            // 5. Pendiente Dorado (Oreja Izquierda)
+            const earringGeo = new THREE.TorusGeometry(0.025, 0.008, 6, 12);
+            const earring = new THREE.Mesh(earringGeo, goldMat);
+            earring.position.set(-0.23, 2.02, 0);
+            npcGroup.add(earring);
+
+            // 6. Extremidades (Brazos y Piernas articuladas)
+            const limbGeo = new THREE.BoxGeometry(0.2, 0.7, 0.2);
+
+            // Brazos
+            const leftArm = new THREE.Mesh(limbGeo, shirtMat);
+            leftArm.position.set(-0.48, 1.3, 0);
+            leftArm.castShadow = true;
+            npcGroup.add(leftArm);
+
+            const rightArm = new THREE.Mesh(limbGeo, shirtMat);
+            rightArm.position.set(0.48, 1.3, 0);
+            rightArm.castShadow = true;
+            npcGroup.add(rightArm);
+
+            // Piernas
+            const leftLeg = new THREE.Mesh(limbGeo, pantsMat);
+            leftLeg.position.set(-0.2, 0.45, 0);
+            leftLeg.castShadow = true;
+            npcGroup.add(leftLeg);
+
+            const rightLeg = new THREE.Mesh(limbGeo, pantsMat);
+            rightLeg.position.set(0.2, 0.45, 0);
+            rightLeg.castShadow = true;
+            npcGroup.add(rightLeg);
+
+            // Guardar referencias a extremidades para animación
+            npcGroup.userData = {
+                leftArm, rightArm, leftLeg, rightLeg, head, glassesGroup,
+                walkCycle: 0
+            };
+
+            return npcGroup;
+        }
+
+        const npc = createDetailedNPC();
+        npc.position.set(5, 0, 0);
+        scene.add(npc);
+
+        // ==========================================
+        // 5. CREACIÓN DEL JUGADOR CONTROLABLE
+        // ==========================================
+        function createPlayer() {
+            const playerGroup = new THREE.Group();
+            
+            // Cuerpo del jugador (Representación estilizada)
+            const bodyMat = new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.5 });
+            const headMat = new THREE.MeshStandardMaterial({ color: 0xfcd34d });
+
+            const body = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 1.2, 16), bodyMat);
+            body.position.y = 0.9;
+            body.castShadow = true;
+
+            const head = new THREE.Mesh(new THREE.SphereGeometry(0.25, 16, 16), headMat);
+            head.position.y = 1.7;
+            head.castShadow = true;
+
+            playerGroup.add(body, head);
+            return playerGroup;
+        }
+
+        const player = createPlayer();
+        player.position.set(-10, 0, 10);
+        scene.add(player);
+
+        // ==========================================
+        // 6. LÓGICA DEL JUGADOR Y CONTROLES (WASD/FLECHAS)
+        // ==========================================
+        const keys = {
+            forward: false,
+            backward: false,
+            left: false,
+            right: false,
+            run: false,
+            jump: false
+        };
+
+        window.addEventListener('keydown', (e) => {
+            switch (e.code) {
+                case 'ArrowUp': case 'KeyW': keys.forward = true; break;
+                case 'ArrowDown': case 'KeyS': keys.backward = true; break;
+                case 'ArrowLeft': case 'KeyA': keys.left = true; break;
+                case 'ArrowRight': case 'KeyD': keys.right = true; break;
+                case 'ShiftLeft': case 'ShiftRight': keys.run = true; break;
+                case 'Space': keys.jump = true; break;
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            switch (e.code) {
+                case 'ArrowUp': case 'KeyW': keys.forward = false; break;
+                case 'ArrowDown': case 'KeyS': keys.backward = false; break;
+                case 'ArrowLeft': case 'KeyA': keys.left = false; break;
+                case 'ArrowRight': case 'KeyD': keys.right = false; break;
+                case 'ShiftLeft': case 'ShiftRight': keys.run = false; break;
+                case 'Space': keys.jump = false; break;
+            }
+        });
+
+        // Física simple del jugador
+        let playerVelocityY = 0;
+        const gravity = -25;
+        let isGrounded = true;
+
+        function updatePlayer(delta) {
+            // Rotación / Giro
+            const turnSpeed = 2.5 * delta;
+            if (keys.left) player.rotation.y += turnSpeed;
+            if (keys.right) player.rotation.y -= turnSpeed;
+
+            // Velocidad según correr o caminar
+            const moveSpeed = (keys.run ? 12 : 6) * delta;
+            const moveDir = new THREE.Vector3();
+
+            if (keys.forward) moveDir.z -= 1;
+            if (keys.backward) moveDir.z += 1;
+
+            moveDir.normalize();
+            moveDir.applyAxisAngle(new THREE.Vector3(0, 1, 0), player.rotation.y);
+
+            // Nueva posición calculada
+            const nextX = player.position.x + moveDir.x * moveSpeed;
+            const nextZ = player.position.z + moveDir.z * moveSpeed;
+
+            // Verificación de límites del campo
+            if (Math.abs(nextX) < BOUNDS_X) player.position.x = nextX;
+            if (Math.abs(nextZ) < BOUNDS_Z) player.position.z = nextZ;
+
+            // Salto
+            if (keys.jump && isGrounded) {
+                playerVelocityY = 9.0;
+                isGrounded = false;
+            }
+
+            // Aplicar gravedad
+            playerVelocityY += gravity * delta;
+            player.position.y += playerVelocityY * delta;
+
+            if (player.position.y <= 0) {
+                player.position.y = 0;
+                playerVelocityY = 0;
+                isGrounded = true;
+            }
+
+            // Suavizar seguimiento de cámara estilo tercera persona
+            const cameraOffset = new THREE.Vector3(0, 6, 12).applyAxisAngle(new THREE.Vector3(0, 1, 0), player.rotation.y);
+            const targetCamPos = player.position.clone().add(cameraOffset);
+            camera.position.lerp(targetCamPos, 0.1);
+            camera.lookAt(player.position.x, player.position.y + 1.2, player.position.z);
+        }
+
+        // ==========================================
+        // 7. MÁQUINA DE ESTADOS FINITOS (FSM) DEL NPC AUTÓNOMO
+        // ==========================================
+        /*
+          Parámetros ajustables de la personalidad del NPC:
+          - NPC_STATES: Estados de comportamiento (Caminar, Correr, Detenido, Ajustar Gafas).
+          - speedMultiplier: Cambia el ritmo global del NPC.
+        */
+        const NPC_STATES = { IDLE: 'IDLE', WALKING: 'WALKING', RUNNING: 'RUNNING', ADJUST_GLASSES: 'ADJUST_GLASSES' };
+        let npcState = NPC_STATES.WALKING;
+        let npcTimer = 0;
+        let npcTargetAngle = Math.random() * Math.PI * 2;
+
+        const npcStatusTag = document.getElementById('npc-state-tag');
+        const npcThought = document.getElementById('npc-thought');
+
+        const thoughts = {
+            IDLE: '"Observando el entorno tranquilamente..."',
+            WALKING: '"Dando un paseo por el césped..."',
+            RUNNING: '"Aumentando el ritmo de entrenamiento..."',
+            ADJUST_GLASSES: '"Ajustando las gafas doradas..."'
+        };
+
+        function updateNPCFSM(delta) {
+            npcTimer -= delta;
+
+            // Cambiar de estado autónomamente tras cierto tiempo
+            if (npcTimer <= 0) {
+                const states = [NPC_STATES.IDLE, NPC_STATES.WALKING, NPC_STATES.RUNNING, NPC_STATES.ADJUST_GLASSES];
+                npcState = states[Math.floor(Math.random() * states.length)];
+                npcTimer = 3 + Math.random() * 4; // Cambiar cada 3 a 7 segundos
+
+                // Actualizar interfaz HUD
+                npcStatusTag.innerText = npcState;
+                npcThought.innerText = thoughts[npcState];
+            }
+
+            let currentSpeed = 0;
+            if (npcState === NPC_STATES.WALKING) currentSpeed = 3.0;
+            if (npcState === NPC_STATES.RUNNING) currentSpeed = 7.0;
+
+            // Movimiento e inteligencia de límites
+            if (currentSpeed > 0) {
+                // Avanzar en la dirección actual
+                const moveX = Math.sin(npc.rotation.y) * currentSpeed * delta;
+                const moveZ = Math.cos(npc.rotation.y) * currentSpeed * delta;
+
+                const nextX = npc.position.x + moveX;
+                const nextZ = npc.position.z + moveZ;
+
+                // Detección de límites para girar suavemente antes de salir
+                if (Math.abs(nextX) > BOUNDS_X - 3 || Math.abs(nextZ) > BOUNDS_Z - 3) {
+                    npcTargetAngle += Math.PI / 2 + Math.random(); // Girar dirección
+                } else {
+                    npc.position.x = nextX;
+                    npc.position.z = nextZ;
+                }
+            }
+
+            // Interpolación suave del giro
+            npc.rotation.y = THREE.MathUtils.lerp(npc.rotation.y, npcTargetAngle, 0.05);
+
+            // ANIMACIONES PROCEDIMENTALES SEGÚN EL ESTADO
+            const limbs = npc.userData;
+            if (currentSpeed > 0) {
+                limbs.walkCycle += delta * currentSpeed * 2.5;
+                const angle = Math.sin(limbs.walkCycle) * 0.6;
+                limbs.leftLeg.rotation.x = angle;
+                limbs.rightLeg.rotation.x = -angle;
+                limbs.leftArm.rotation.x = -angle;
+                limbs.rightArm.rotation.x = angle;
+            } else if (npcState === NPC_STATES.ADJUST_GLASSES) {
+                // Gestos característicos: Llevar brazo derecho a la cara para acomodar gafas
+                limbs.rightArm.rotation.x = THREE.MathUtils.lerp(limbs.rightArm.rotation.x, -2.2, 0.1);
+                limbs.rightArm.rotation.z = THREE.MathUtils.lerp(limbs.rightArm.rotation.z, -0.4, 0.1);
+            } else {
+                // Posición de reposo
+                limbs.leftLeg.rotation.x = THREE.MathUtils.lerp(limbs.leftLeg.rotation.x, 0, 0.1);
+                limbs.rightLeg.rotation.x = THREE.MathUtils.lerp(limbs.rightLeg.rotation.x, 0, 0.1);
+                limbs.leftArm.rotation.x = THREE.MathUtils.lerp(limbs.leftArm.rotation.x, 0, 0.1);
+                limbs.rightArm.rotation.x = THREE.MathUtils.lerp(limbs.rightArm.rotation.x, 0, 0.1);
+                limbs.rightArm.rotation.z = THREE.MathUtils.lerp(limbs.rightArm.rotation.z, 0, 0.1);
+            }
+        }
+
+        // ==========================================
+        // 8. BUCLE DE ANIMACIÓN Y RESIZE
+        // ==========================================
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const delta = Math.min(clock.getDelta(), 0.1); // Prevenir saltos de frame
+
+            updatePlayer(delta);
+            updateNPCFSM(delta);
+
+            renderer.render(scene, camera);
+        }
+
+        // Inicio del bucle al cargar
+        window.onload = () => {
+            animate();
+        };
+
+        // Redimensionamiento dinámico del viewport
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
